@@ -9,12 +9,13 @@ on:
 
 jobs:
   merge-gate:
-    name: Maintainer Approval Required
+    name: merge-gate
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
+      statuses: write
     steps:
-      - name: Require maintainer approval
+      - name: Check maintainer approval
         uses: actions/github-script@v7
         with:
           script: |
@@ -62,13 +63,32 @@ jobs:
               }
             }
 
+            // Use the Commit Status API instead of core.setFailed()
+            // This ensures multiple runs for the same commit overwrite
+            // each other instead of creating conflicting check runs
             if (validApprovals.length === 0) {
-              let message = `❌ Requires approval from a user with Maintain or Admin permission before merging.\n` +
-                `Contributors (Write permission) cannot satisfy this requirement.`;
+              let description = 'Requires approval from a Maintain/Admin user';
               if (staleApprovals.length > 0) {
-                message += `\n\n⚠️ Stale approvals (new commits pushed since review): ${staleApprovals.join(', ')}`;
+                description = `Stale approvals (pushed after review): ${staleApprovals.join(', ')}`;
               }
-              core.setFailed(message);
+              await github.rest.repos.createCommitStatus({
+                owner,
+                repo,
+                sha: currentHead,
+                state: 'failure',
+                context: 'Maintainer Approval Required',
+                description,
+              });
+              core.info(`❌ ${description}`);
             } else {
-              core.info(`✅ Approved by maintainer(s): ${validApprovals.join(', ')}`);
+              const approvedBy = validApprovals.join(', ');
+              await github.rest.repos.createCommitStatus({
+                owner,
+                repo,
+                sha: currentHead,
+                state: 'success',
+                context: 'Maintainer Approval Required',
+                description: `Approved by: ${approvedBy}`,
+              });
+              core.info(`✅ Approved by maintainer(s): ${approvedBy}`);
             }
