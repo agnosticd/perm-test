@@ -1,0 +1,76 @@
+---
+name: Merge Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+jobs:
+  merge-gate:
+    name: merge-gate
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      organization: read
+    steps:
+      - name: Require maintainer approval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const org = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // Get all reviews on this PR
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: org,
+              repo: repo,
+              pull_number: prNumber,
+            });
+
+            // Get maintainers team members
+            let maintainerLogins;
+            try {
+              const { data: members } = await github.rest.teams.listMembersInOrg({
+                org: org,
+                team_slug: 'maintainers',
+              });
+              maintainerLogins = new Set(members.map(m => m.login));
+            } catch (error) {
+              core.setFailed(
+                `Cannot read maintainers team membership. ` +
+                `Ensure the workflow token has org:read permission. ` +
+                `Error: ${error.message}`
+              );
+              return;
+            }
+
+            // Get the PR author to prevent self-approval
+            const prAuthor = context.payload.pull_request.user.login;
+
+            // Build map of latest review per user
+            const latestReviews = new Map();
+            for (const review of reviews) {
+              latestReviews.set(review.user.login, review);
+            }
+
+            // Find maintainer approvals (excluding self-approval)
+            const approvals = [...latestReviews.values()].filter(
+              r => r.state === 'APPROVED'
+                && maintainerLogins.has(r.user.login)
+                && r.user.login !== prAuthor
+            );
+
+            if (approvals.length === 0) {
+              const maintainerList = [...maintainerLogins].map(l => `@${l}`).join(', ');
+              core.setFailed(
+                `❌ Requires approval from a maintainer before merging.\n` +
+                `Maintainers: ${maintainerList}`
+              );
+            } else {
+              const approvedBy = approvals.map(a => a.user.login).join(', ');
+              core.info(`✅ Approved by maintainer(s): ${approvedBy}`);
+            }
+
