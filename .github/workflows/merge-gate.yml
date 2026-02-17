@@ -25,6 +25,16 @@ jobs:
             const prAuthor = context.payload.pull_request.user.login;
             const currentHead = context.payload.pull_request.head.sha;
 
+            // Get the latest commit's timestamp to detect stale reviews
+            // GitHub updates review.commit_id to current HEAD, making it
+            // unreliable for staleness checks. Timestamps are immutable.
+            const { data: headCommit } = await github.rest.repos.getCommit({
+              owner,
+              repo,
+              ref: currentHead,
+            });
+            const headCommitDate = new Date(headCommit.commit.committer.date);
+
             // Get all reviews on this PR
             const { data: reviews } = await github.rest.pulls.listReviews({
               owner,
@@ -39,15 +49,16 @@ jobs:
             }
 
             // Check each approver's repo permission level
-            // Only count approvals against the current HEAD commit
+            // Only count approvals submitted AFTER the latest commit
             const validApprovals = [];
             const staleApprovals = [];
             for (const [login, review] of latestReviews) {
               if (review.state !== 'APPROVED') continue;
               if (login === prAuthor) continue;
 
-              // Reject approvals made against an older commit
-              if (review.commit_id !== currentHead) {
+              // Reject approvals submitted before the latest commit
+              const reviewDate = new Date(review.submitted_at);
+              if (reviewDate < headCommitDate) {
                 staleApprovals.push(login);
                 continue;
               }
