@@ -19,35 +19,16 @@ jobs:
         with:
           script: |
             const prNumber = context.payload.pull_request.number;
-            const org = context.repo.owner;
+            const owner = context.repo.owner;
             const repo = context.repo.repo;
+            const prAuthor = context.payload.pull_request.user.login;
 
             // Get all reviews on this PR
             const { data: reviews } = await github.rest.pulls.listReviews({
-              owner: org,
-              repo: repo,
+              owner,
+              repo,
               pull_number: prNumber,
             });
-
-            // Get maintainers team members
-            let maintainerLogins;
-            try {
-              const { data: members } = await github.rest.teams.listMembersInOrg({
-                org: org,
-                team_slug: 'maintainers',
-              });
-              maintainerLogins = new Set(members.map(m => m.login));
-            } catch (error) {
-              core.setFailed(
-                `Cannot read maintainers team membership. ` +
-                `Ensure the workflow token has org:read permission. ` +
-                `Error: ${error.message}`
-              );
-              return;
-            }
-
-            // Get the PR author to prevent self-approval
-            const prAuthor = context.payload.pull_request.user.login;
 
             // Build map of latest review per user
             const latestReviews = new Map();
@@ -55,21 +36,29 @@ jobs:
               latestReviews.set(review.user.login, review);
             }
 
-            // Find maintainer approvals (excluding self-approval)
-            const approvals = [...latestReviews.values()].filter(
-              r => r.state === 'APPROVED'
-                && maintainerLogins.has(r.user.login)
-                && r.user.login !== prAuthor
-            );
+            // Check each approver's repo permission level
+            // Maintain or Admin = maintainer, Write or below = contributor
+            const validApprovals = [];
+            for (const [login, review] of latestReviews) {
+              if (review.state !== 'APPROVED') continue;
+              if (login === prAuthor) continue;
 
-            if (approvals.length === 0) {
-              const maintainerList = [...maintainerLogins].map(l => `@${l}`).join(', ');
-              core.setFailed(
-                `❌ Requires approval from a maintainer before merging.\n` +
-                `Maintainers: ${maintainerList}`
-              );
-            } else {
-              const approvedBy = approvals.map(a => a.user.login).join(', ');
-              core.info(`✅ Approved by maintainer(s): ${approvedBy}`);
+              const { data: permData } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner,
+                repo,
+                username: login,
+              });
+
+              if (['admin', 'maintain'].includes(permData.permission)) {
+                validApprovals.push(login);
+              }
             }
 
+            if (validApprovals.length === 0) {
+              core.setFailed(
+                `❌ Requires approval from a user with Maintain or Admin permission before merging.\n` +
+                `Contributors (Write permission) cannot satisfy this requirement.`
+              );
+            } else {
+              core.info(`✅ Approved by maintainer(s): ${validApprovals.join(', ')}`);
+            }

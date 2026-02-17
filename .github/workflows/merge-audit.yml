@@ -19,35 +19,37 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const merger = pr.merged_by.login;
-            const org = context.repo.owner;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
 
-            let maintainerLogins;
+            let mergerPermission;
             try {
-              const { data: members } = await github.rest.teams.listMembersInOrg({
-                org: org,
-                team_slug: 'maintainers',
+              const { data: permData } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner,
+                repo,
+                username: merger,
               });
-              maintainerLogins = new Set(members.map(m => m.login));
+              mergerPermission = permData.permission;
             } catch (error) {
               core.warning(`Cannot verify merger identity: ${error.message}`);
               return;
             }
 
-            if (!maintainerLogins.has(merger)) {
+            if (!['admin', 'maintain'].includes(mergerPermission)) {
               const message = `⚠️ **Merge audit warning**: This PR was merged by ` +
-                `@${merger}, who is not a member of the maintainers team.\n\n` +
+                `@${merger} (permission: \`${mergerPermission}\`), who does not have ` +
+                `Maintain or Admin access.\n\n` +
                 `The code was reviewed and approved, so no action is required ` +
                 `unless this was unauthorized.`;
 
               await github.rest.issues.createComment({
-                owner: org,
-                repo: context.repo.repo,
+                owner,
+                repo,
                 issue_number: pr.number,
                 body: message,
               });
 
-              core.warning(`PR #${pr.number} merged by non-maintainer: ${merger}`);
+              core.warning(`PR #${pr.number} merged by non-maintainer: ${merger} (${mergerPermission})`);
             } else {
-              core.info(`PR #${pr.number} merged by maintainer: ${merger}`);
+              core.info(`PR #${pr.number} merged by maintainer: ${merger} (${mergerPermission})`);
             }
-
