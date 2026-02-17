@@ -7,7 +7,7 @@ on:
 
 jobs:
   audit-merger:
-    name: merge-audit
+    name: Merge Audit (non-maintainer warning)
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:

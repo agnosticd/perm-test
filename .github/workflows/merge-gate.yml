@@ -9,7 +9,7 @@ on:
 
 jobs:
   merge-gate:
-    name: merge-gate
+    name: Maintainer Approval Required
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
