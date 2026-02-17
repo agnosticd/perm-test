@@ -22,6 +22,7 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const prAuthor = context.payload.pull_request.user.login;
+            const currentHead = context.payload.pull_request.head.sha;
 
             // Get all reviews on this PR
             const { data: reviews } = await github.rest.pulls.listReviews({
@@ -37,11 +38,18 @@ jobs:
             }
 
             // Check each approver's repo permission level
-            // Maintain or Admin = maintainer, Write or below = contributor
+            // Only count approvals against the current HEAD commit
             const validApprovals = [];
+            const staleApprovals = [];
             for (const [login, review] of latestReviews) {
               if (review.state !== 'APPROVED') continue;
               if (login === prAuthor) continue;
+
+              // Reject approvals made against an older commit
+              if (review.commit_id !== currentHead) {
+                staleApprovals.push(login);
+                continue;
+              }
 
               const { data: permData } = await github.rest.repos.getCollaboratorPermissionLevel({
                 owner,
@@ -55,10 +63,12 @@ jobs:
             }
 
             if (validApprovals.length === 0) {
-              core.setFailed(
-                `❌ Requires approval from a user with Maintain or Admin permission before merging.\n` +
-                `Contributors (Write permission) cannot satisfy this requirement.`
-              );
+              let message = `❌ Requires approval from a user with Maintain or Admin permission before merging.\n` +
+                `Contributors (Write permission) cannot satisfy this requirement.`;
+              if (staleApprovals.length > 0) {
+                message += `\n\n⚠️ Stale approvals (new commits pushed since review): ${staleApprovals.join(', ')}`;
+              }
+              core.setFailed(message);
             } else {
               core.info(`✅ Approved by maintainer(s): ${validApprovals.join(', ')}`);
             }
